@@ -1,0 +1,8 @@
+scikit-learn
+pandas
+numpy
+Boruta
+matplotlib
+polars
+ipykernel
+acconeer.exptool[app]
