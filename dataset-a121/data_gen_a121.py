@@ -1,19 +1,14 @@
-
 import numpy as np
-import scipy.signal as signal
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import classification_report, confusion_matrix, ConfusionMatrixDisplay
-import matplotlib.pyplot as plt
+import pandas as pd
 
 # =====================================================================
 # 1. Physical and electromagnetic paremeters for the Acconeer A121
 # =====================================================================
-FC = 60.5e9               # Carrier frequency: 60.5 GHz
+FC = 60e9                 # Carrier frequency: 60 GHz
 C = 3.0e8                 # Light speed (m/s)
-WAVELENGTH = C / FC       # Wavelenght (~4.95 mm)
-SWEEP_RATE = 500          # Sweep frequency (Hz) - slow-time
-NUM_SWEEPS_PER_FRAME = 64 # Number of sweeps for a single Range-Doppler map
+WAVELENGTH = C / FC       # Wavelenght (5 mm)
+SWEEP_RATE = 400          # Sweep frequency (Hz) - slow-time
+NUM_SWEEPS_PER_FRAME = 32 # Number of sweeps for a single Range-Doppler map
 RANGE_RESOLUTION = 0.025  # Resolution/distance step (2.5 cm)
 NUM_RANGE_BINS = 40       # Number of distance bins
 START_RANGE = 0.5         # Minimal measured distance (m)
@@ -24,96 +19,116 @@ ACTIONS = ["walking", "bending", "drinking", "lying", "sitting", "falling"]
 # =====================================================================
 # 2. SIMULATORE CINEMATICO (STILE CMU MOCAP DATASET)
 # =====================================================================
-def generate_mocap_trajectory(action, duration_sec=2.0, fs=SWEEP_RATE):
+def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
     """
-    Simula le coordinate 3D (x, y, z) nel tempo di 5 scatterer corporei principali:
-    0: Torso (RCS = 1.0)
-    1: Testa (RCS = 0.3)
-    2: Mano Destra (RCS = 0.15)
-    3: Mano Sinistra (RCS = 0.15)
-    4: Gamba/Piede Sinistro (RCS = 0.2)
-    5: Gamba/Piede Destro (RCS = 0.2)
+    Modello cinematico a 7 scatterer:
+    0: Basin (Root)
+    1: Torso
+    2: Head
+    3: Right Hand
+    4: Left Hand
+    5: Left foot
+    6: Right foot
     """
+    
     num_samples = int(duration_sec * fs)
     t = np.linspace(0, duration_sec, num_samples)
+
+    # A 3D matrix 7x250x3 containing for every point i its evolution for a time of num_samples
+    # given by the evolution of three coordinates (x,y,z)
+    points = np.zeros((7, num_samples, 3))
+
+    # Proportional RCS to the body segments 
+    rcs = np.array([1.0, 0.8, 0.3, 0.15, 0.15, 0.2, 0.2])
     
-    # Inizializzazione posizioni (x: laterale, y: distanza dal radar, z: altezza)
-    # Radar situato all'origine (0, 0, 1.0)
-    points = np.zeros((6, num_samples, 3))
-    rcs = np.array([1.0, 0.3, 0.15, 0.15, 0.2, 0.2])
-    
-    # Generazione traiettorie in base alla classe
     if action == "walking":
-        y_base = 2.5 - 0.6 * t # Avanzamento verso il radar
-        points[0] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.2)]) # Torso
-        points[1] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.6)]) # Testa
-        
-        # Mani in controfase (sfasamento di pi radianti tra destra e sinistra)
-        points[2] = np.column_stack([0.3 * np.sin(2*np.pi*2*t), y_base, 1.0 + 0.2*np.cos(2*np.pi*2*t)])
-        points[3] = np.column_stack([-0.3 * np.sin(2*np.pi*2*t + np.pi), y_base, 1.0 + 0.2*np.cos(2*np.pi*2*t + np.pi)])
-        
-        # Gambe/Piedi in controfase
-        points[4] = np.column_stack([-0.2 * np.ones_like(t), y_base + 0.2*np.sin(2*np.pi*1.5*t), 0.3 + 0.2*np.sin(2*np.pi*1.5*t)])
-        points[5] = np.column_stack([0.2 * np.ones_like(t), y_base - 0.2*np.sin(2*np.pi*1.5*t), 0.3 - 0.2*np.sin(2*np.pi*1.5*t)])
-        
-    elif action == "bending":
-        y_base = 1.8
-        bend_factor = np.sin(np.pi * t / duration_sec) # Flessione in avanti
-        points[0] = np.column_stack([np.zeros_like(t), y_base - 0.3 * bend_factor, 1.2 - 0.4 * bend_factor])
-        points[1] = np.column_stack([np.zeros_like(t), y_base - 0.5 * bend_factor, 1.6 - 0.7 * bend_factor])
-        points[2] = np.column_stack([0.2 * bend_factor, y_base - 0.6 * bend_factor, 1.0 - 0.8 * bend_factor])  # Mano DX a terra
-        points[3] = np.column_stack([-0.2 * bend_factor, y_base - 0.6 * bend_factor, 1.0 - 0.8 * bend_factor]) # Mano SX a terra
-        points[4] = np.column_stack([-0.2 * np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.2)])
-        points[5] = np.column_stack([0.2 * np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.2)])
+        y_base = 2.5 - 0.6 * t  # Avanzamento
+        # Tronco
+        points[0] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.0)])  # Bacino
+        points[1] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.4)])  # Torso
+        points[2] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.7)])  # Testa
+        # Mani (oscillano in controfase)
+        points[3] = np.column_stack([ 0.3*np.ones_like(t), y_base + 0.3*np.cos(2*np.pi*1.5*t), 0.9 - 0.1*np.sin(2*np.pi*1.5*t)])
+        points[4] = np.column_stack([-0.3*np.ones_like(t), y_base - 0.3*np.cos(2*np.pi*1.5*t), 0.9 + 0.1*np.sin(2*np.pi*1.5*t)])
+        # Piedi (passi alternati, non scendono sotto Z=0)
+        points[5] = np.column_stack([-0.2*np.ones_like(t), y_base + 0.3*np.sin(2*np.pi*1.5*t), np.maximum(0, 0.2*np.cos(2*np.pi*1.5*t))])
+        points[6] = np.column_stack([ 0.2*np.ones_like(t), y_base - 0.3*np.sin(2*np.pi*1.5*t), np.maximum(0, -0.2*np.cos(2*np.pi*1.5*t))])
 
-    elif action == "drinking":
-        y_base = 1.5
-        drink_hand = np.sin(np.pi * t / duration_sec)
-        points[0] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base), np.full_like(t, 1.2)])
-        points[1] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base), np.full_like(t, 1.6)])
-        points[2] = np.column_stack([np.zeros_like(t), y_base - 0.2 * drink_hand, 0.8 + 0.7 * drink_hand]) # Mano DX al viso
-        points[3] = np.column_stack([-0.3 * np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.8)])# Mano SX ferma
-        points[4] = np.column_stack([-0.2 * np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.2)])
-        points[5] = np.column_stack([0.2 * np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.2)])
-
-    elif action == "lying":
-        y_base = 2.0
-        micro_breath = 0.003 * np.sin(2 * np.pi * 0.3 * t)
-        
-        # Torso (con micro-respirazione)
-        points[0] = np.column_stack([np.zeros_like(t), y_base + micro_breath, np.full_like(t, 0.4)])
-        # Testa
-        points[1] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 0.4), np.full_like(t, 0.4)])
-        # Mano DX
-        points[2] = np.column_stack([0.3 * np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.4)])
-        # Mano SX
-        points[3] = np.column_stack([-0.3 * np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.4)])
-        # Gamba SX
-        points[4] = np.column_stack([-0.2 * np.ones_like(t), np.full_like(t, y_base - 0.5), np.full_like(t, 0.4)])
-        # Gamba DX
-        points[5] = np.column_stack([0.2 * np.ones_like(t), np.full_like(t, y_base - 0.5), np.full_like(t, 0.4)])
-    
     elif action == "sitting":
-        y_base = 1.7
-        sit_progress = np.clip(t / (duration_sec * 0.7), 0, 1)
-        points[0] = np.column_stack([np.zeros_like(t), y_base + 0.1*sit_progress, 1.2 - 0.6 * sit_progress])
-        points[1] = np.column_stack([np.zeros_like(t), y_base + 0.1*sit_progress, 1.6 - 0.6 * sit_progress])
-        points[2] = np.column_stack([0.3 * np.ones_like(t), np.full_like(t, y_base), 0.9 - 0.5 * sit_progress])
-        points[3] = np.column_stack([-0.3 * np.ones_like(t), np.full_like(t, y_base), 0.9 - 0.5 * sit_progress])
-        points[4] = np.column_stack([-0.2 * np.ones_like(t), np.full_like(t, y_base - 0.2), np.full_like(t, 0.3)])
-        points[5] = np.column_stack([0.2 * np.ones_like(t), np.full_like(t, y_base - 0.2), np.full_like(t, 0.3)])
+        # Ci si siede fluidamente nei primi 70% del tempo
+        prog = np.clip(t / (duration_sec * 0.7), 0, 1)
+        # Smussamento dell'animazione (ease-in-out)
+        prog = 0.5 * (1 - np.cos(np.pi * prog))
+        
+        y_base = 2.0
+        # Il bacino scende e si sposta leggermente indietro
+        points[0] = np.column_stack([np.zeros_like(t), y_base + 0.2*prog, 1.0 - 0.5*prog])
+        points[1] = np.column_stack([np.zeros_like(t), y_base + 0.2*prog, 1.4 - 0.5*prog])
+        points[2] = np.column_stack([np.zeros_like(t), y_base + 0.2*prog, 1.7 - 0.5*prog])
+        # Le mani si appoggiano sulle ginocchia
+        points[3] = np.column_stack([ 0.3*np.ones_like(t), y_base - 0.2*prog, 0.9 - 0.3*prog])
+        points[4] = np.column_stack([-0.3*np.ones_like(t), y_base - 0.2*prog, 0.9 - 0.3*prog])
+        # I piedi restano PIANTATI a terra (Z=0, Y=avanti al bacino)
+        points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base - 0.3), np.zeros_like(t)])
+        points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base - 0.3), np.zeros_like(t)])
+
+    elif action == "bending":
+        # Piega in avanti e poi si rialza
+        bend = np.sin(np.pi * t / duration_sec)
+        y_base = 2.0
+        
+        # Il bacino indietreggia leggermente per bilanciare, Z resta quasi uguale
+        points[0] = np.column_stack([np.zeros_like(t), y_base + 0.2*bend, 1.0 - 0.1*bend])
+        # Torso e testa si abbassano e vanno in avanti verso il radar
+        points[1] = np.column_stack([np.zeros_like(t), y_base - 0.4*bend, 1.4 - 0.6*bend])
+        points[2] = np.column_stack([np.zeros_like(t), y_base - 0.7*bend, 1.7 - 0.9*bend])
+        # Le mani vanno verso terra
+        points[3] = np.column_stack([ 0.2*np.ones_like(t), y_base - 0.6*bend, 0.9 - 0.7*bend])
+        points[4] = np.column_stack([-0.2*np.ones_like(t), y_base - 0.6*bend, 0.9 - 0.7*bend])
+        # Piedi fermi a terra
+        points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
+        points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
 
     elif action == "falling":
-        y_base = 1.8
-        # Caduta rapida accelerata verso il basso
-        fall_t = np.clip(t - 0.5, 0, None)
-        z_fall = np.maximum(1.2 - 0.5 * 9.8 * fall_t**2, 0.2)
-        points[0] = np.column_stack([np.zeros_like(t), y_base + 0.3*(1.2 - z_fall), z_fall])
-        points[1] = np.column_stack([np.zeros_like(t), y_base + 0.5*(1.2 - z_fall), z_fall + 0.3])
-        points[2] = np.column_stack([0.4 * np.ones_like(t), np.full_like(t, y_base), z_fall + 0.1])
-        points[3] = np.column_stack([-0.4 * np.ones_like(t), np.full_like(t, y_base), z_fall + 0.1])
-        points[4] = np.column_stack([-0.2 * np.ones_like(t), np.full_like(t, y_base - 0.2), np.minimum(0.3, z_fall)])
-        points[5] = np.column_stack([0.2 * np.ones_like(t), np.full_like(t, y_base - 0.2), np.minimum(0.3, z_fall)])
+        # Caduta in avanti accelerata dalla gravità
+        fall_t = np.clip((t - 0.3) * 1.5, 0, 1)
+        fall_prog = fall_t ** 2  # Accelerazione
+        y_base = 2.0
+        
+        points[0] = np.column_stack([np.zeros_like(t), y_base - 0.8*fall_prog, 1.0 - 0.8*fall_prog])
+        points[1] = np.column_stack([np.zeros_like(t), y_base - 1.4*fall_prog, 1.4 - 1.2*fall_prog])
+        points[2] = np.column_stack([np.zeros_like(t), y_base - 1.7*fall_prog, 1.7 - 1.5*fall_prog])
+        points[3] = np.column_stack([ 0.4*np.ones_like(t), y_base - 1.4*fall_prog, 0.9 - 0.7*fall_prog])
+        points[4] = np.column_stack([-0.4*np.ones_like(t), y_base - 1.4*fall_prog, 0.9 - 0.7*fall_prog])
+        # Piedi fermi (fanno da perno alla caduta)
+        points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
+        points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
+
+    elif action == "lying":
+        # Soggetto disteso a terra con micro-respirazione sul torso a 0.3Hz
+        y_base = 1.0
+        breath = 0.02 * np.sin(2 * np.pi * 0.3 * t)
+        
+        points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.1)]) # Piedi vicini al radar
+        points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.1)])
+        points[0] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 0.9), np.full_like(t, 0.1)]) # Bacino
+        points[1] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 1.4), 0.1 + breath]) # Torso respira
+        points[3] = np.column_stack([ 0.4*np.ones_like(t), np.full_like(t, y_base + 1.3), np.full_like(t, 0.1)])
+        points[4] = np.column_stack([-0.4*np.ones_like(t), np.full_like(t, y_base + 1.3), np.full_like(t, 0.1)])
+        points[2] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 1.7), np.full_like(t, 0.1)]) # Testa
+        
+    elif action == "drinking":
+        # Solo il braccio si muove verso la testa
+        y_base = 2.0
+        drink = np.sin(np.pi * 1.5 * t / duration_sec)
+        
+        points[0] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base), np.full_like(t, 1.0)])
+        points[1] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base), np.full_like(t, 1.4)])
+        points[2] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base), np.full_like(t, 1.7)])
+        points[3] = np.column_stack([0.2*(1-drink), y_base - 0.2*drink, 0.9 + 0.7*drink]) # Mano DX va alla bocca
+        points[4] = np.column_stack([-0.3*np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.9)])
+        points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
+        points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
 
     return points, rcs
 
@@ -137,7 +152,7 @@ def synthesize_acconeer_iq(points, rcs, range_bins=NUM_RANGE_BINS, start_range=S
             
             # Sfasamento coerente del segnale IQ
             phase = -4.0 * np.pi * R_k / WAVELENGTH
-            complex_amplitude = np.sqrt(rcs[k]) * np.exp(1j * phase)
+            complex_amplitude = (np.sqrt(rcs[k]) / (R_k**2) ) * np.exp(1j * phase)
             
             # Inviluppo dell'impulso radar gaussian-shaped lungo i range bin
             pulse_envelope = np.exp(-0.5 * ((range_axis - R_k) / (res * 1.2)) ** 2)
@@ -148,6 +163,24 @@ def synthesize_acconeer_iq(points, rcs, range_bins=NUM_RANGE_BINS, start_range=S
     noise = (np.random.normal(0, NOISE_STD, iq_matrix.shape) + 
              1j * np.random.normal(0, NOISE_STD, iq_matrix.shape))
     return iq_matrix + noise
+
+# =====================================================================
+# 3.5. PROFILO DI RANGE GREZZO (NESSUN CLUTTER REMOVAL)
+# =====================================================================
+def compute_raw_range_profile(iq_data_full):
+    """
+    Profilo di riflettività per range bin calcolato SENZA sottrazione
+    della media lungo lo slow-time. A differenza della Range-Doppler Map
+    (pensata per isolare il moto), questo profilo preserva l'estensione
+    spaziale del corpo, inclusi gli scatterer perfettamente fermi che la
+    clutter removal cancellerebbe.
+ 
+    iq_data_full: matrice IQ dell'intero trial (tutti gli sweep), non un
+    singolo frame — la posizione del corpo non cambia frame-per-frame
+    come il Doppler, quindi mediare su più sweep dà anche una stima più
+    pulita rispetto al rumore.
+    """
+    return np.mean(np.abs(iq_data_full) ** 2, axis=0)
 
 # =====================================================================
 # 4. TRASFORMATA RANGE-DOPPLER (RDM)
@@ -170,12 +203,18 @@ def compute_range_doppler_map(iq_frame):
     rdm_power = np.abs(rdm)**2
     return rdm_power
 
+
 # =====================================================================
 # 5. ESTRAZIONE DELLE FEATURE (HAND-CRAFTED FEATURES)
 # =====================================================================
-def extract_handcrafted_features(rdm_stack):
+def extract_handcrafted_features(rdm_stack, iq_data_full):
     """
-    Estrae feature rilevanti da una sequenza temporale di Mappe Range-Doppler.
+    Estrae feature rilevanti da:
+    - una sequenza temporale di Mappe Range-Doppler (rdm_stack) -> feature
+      di MOTO (Doppler), calcolate per frame e aggregate su mean/std/max;
+    - il segnale IQ grezzo dell'intero trial (iq_data_full) -> feature di
+      POSIZIONE/POSTURA, calcolate una sola volta per trial, perché la
+      RDM ha già cancellato l'informazione spaziale statica.
     """
     features = []
     
@@ -207,7 +246,9 @@ def extract_handcrafted_features(rdm_stack):
         high_doppler_mask = np.abs(doppler_bins) > (num_doppler_bins * 0.25)
         high_doppler_ratio = np.sum(doppler_profile[high_doppler_mask]) / total_energy
         
-        # Feature Spaziali (Range)
+        # Feature Spaziali (Range) - calcolate dalla RDM (post clutter-removal):
+        # utili come proxy di "dove si trova ciò che si muove", non come
+        # estensione spaziale del corpo (per quella vedi raw_* più sotto).
         range_bins_idx = np.arange(len(range_profile))
         mean_range = np.sum(range_bins_idx * p_range)
         
@@ -227,22 +268,59 @@ def extract_handcrafted_features(rdm_stack):
     std_feats = np.std(feat_arr, axis=0)
     max_feats = np.max(feat_arr, axis=0)
     
-    return np.hstack([mean_feats, std_feats, max_feats])
+    # --- Feature di POSTURA, dal profilo di range grezzo (una volta per trial) ---
+    raw_profile = compute_raw_range_profile(iq_data_full)
+    
+    # Normalizzazione probabilità
+    p_raw = raw_profile / np.sum(raw_profile)
+    
+    raw_idx = np.arange(len(raw_profile))
+ 
+    raw_mean_range = np.sum(raw_idx * p_raw)
+    raw_range_spread = np.sqrt(np.sum(((raw_idx - raw_mean_range) ** 2) * p_raw))
+    occupied = raw_idx[raw_profile > 0.05 * raw_profile.max()]
+    raw_range_span = occupied.max() - occupied.min() if occupied.size else 0
+ 
+    # Escursione del "centro di massa" del moto nel corso del trial
+    # (colonna 6 = mean_range per frame): cattura oscillazioni (drinking)
+    # e spostamenti monotoni (falling/sitting) allo stesso modo.
+    range_excursion = feat_arr[:, 6].max() - feat_arr[:, 6].min()
+ 
+    posture_feats = np.array([raw_mean_range, raw_range_spread, raw_range_span, range_excursion])
+ 
+    return np.hstack([mean_feats, std_feats, max_feats, posture_feats])
 
 # =====================================================================
-# 6. ESECUZIONE PIPELINE COMPLETA E TRAINING RANDOM FOREST
+# 6. ESECUZIONE PIPELINE COMPLETA E CREAZIONE DATASET
 # =====================================================================
-def run_pipeline(samples_per_action=100):
+def inspect_features_by_class(X, y):
+    """
+    Diagnostica rapida: confronta mean/std/max delle feature per classe.
+    Indici delle feature per frame (7 totali): 
+    0=total_energy, 1=doppler_centroid, 2=doppler_spread, 3=max_doppler_bin,
+    4=spectral_entropy, 5=high_doppler_ratio, 6=mean_range (post clutter-removal)
+    Nel vettore finale: mean=0-6, std=7-13, max=14-20,
+    poi 21=raw_mean_range, 22=raw_range_spread, 23=raw_range_span, 24=range_excursion
+    """
+    for label_idx, action in enumerate(ACTIONS):
+        mask = (y == label_idx)
+        print(f"{action:10s}  "
+              f"raw_mean_range={X[mask,21].mean():7.3f}  "
+              f"raw_range_spread={X[mask,22].mean():6.3f}  "
+              f"raw_range_span={X[mask,23].mean():6.3f}  "
+              f"range_excursion={X[mask,24].mean():6.3f}")
+
+def run_pipeline(samples_per_action):
     print("--- 1. Generazione Dataset Sintetico Acconeer A121 ---")
     X = []
-    y = []
+    Y = []
     
     for label_idx, action in enumerate(ACTIONS):
         print(f"Generazione campioni per la classe: {action}...")
         for _ in range(samples_per_action):
             # Aggiunge una leggera variazione casuale alla durata e alla velocità del movimento
             dur = np.random.uniform(1.8, 2.2)
-            points, rcs = generate_mocap_trajectory(action, duration_sec=dur)
+            points, rcs = generate_mocap_trajectory(action, duration_sec=dur, fs=SWEEP_RATE)
             
             # Generazione del segnale IQ
             iq_data = synthesize_acconeer_iq(points, rcs)
@@ -256,40 +334,23 @@ def run_pipeline(samples_per_action=100):
                 rdm_stack.append(rdm)
                 
             # Estrazione feature
-            sample_features = extract_handcrafted_features(rdm_stack)
+            sample_features = extract_handcrafted_features(rdm_stack,iq_data)
             X.append(sample_features)
-            y.append(label_idx)
+            Y.append(label_idx)
             
     X = np.array(X)
-    print(X)
-    y = np.array(y)
-    
-    print(f"\nDataset Generato. Shape Matrice Features: {X.shape}, Shape Etichette: {y.shape}")
-    
-    # Split Train/Test
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.3, random_state=42, stratify=y)
-    
-    print("\n--- 2. Addestramento Classificatore Random Forest ---")
-    clf = RandomForestClassifier(n_estimators=100, max_depth=10, random_state=42,min_samples_leaf=30)
-    clf.fit(X_train, y_train)
-    
-    # Valutazione Modello
-    y_pred = clf.predict(X_test)
-    
-    print("\n--- 3. Risultati della Classificazione in training ---")
-    print(classification_report(y_test, y_pred, target_names=ACTIONS))
+    Y = np.array(Y)
 
-    # Confusion matrix
-    cfm = confusion_matrix(y_test, y_pred)
+    # Diagnostica movimenti
+    inspect_features_by_class(X,Y)
+    
+    print(f"\nDataset Generato. Shape Matrice Features: {X.shape}, Shape Etichette: {Y.shape}")
 
-    # Plot confusion matrix on the test dataset
-    fig, ax = plt.subplots(figsize=(8, 6))
-    disp = ConfusionMatrixDisplay(confusion_matrix=cfm, display_labels=ACTIONS)
-    disp.plot(cmap=plt.cm.Blues, ax=ax, xticks_rotation=45)
-
-    plt.title("Confusion Matrix")
-    plt.tight_layout()
-    plt.show()
+    # Conversion in pandas DataFrame and saving on .csv file
+    dfx = pd.DataFrame(X)
+    dfx.to_csv('dataset-a121/synth_dataset_A121.csv', index=False)
+    dfy = pd.DataFrame(Y)
+    dfy.to_csv("dataset-a121/synth_dataset_A121_targets.csv", index=False)
 
 if __name__ == "__main__":
     run_pipeline(samples_per_action=300)
