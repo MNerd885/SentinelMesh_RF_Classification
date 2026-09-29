@@ -113,4 +113,4 @@ anim = FuncAnimation(fig, update, frames=num_frames, interval=30, blit=True)
 plt.tight_layout()
 plt.show()
 
-anim.save(f"Animations/Range-Doppler maps/{ACTIONS[0]}_rd_map.gif")
+#anim.save(f"Animations/Range-Doppler maps/{ACTIONS[0]}_rd_map.gif")

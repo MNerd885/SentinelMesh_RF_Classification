@@ -22,7 +22,7 @@ for this idea is [Chen, V. C. (2019). The Micro-Doppler Effect in Radar (2nd ed.
 
 The Cartesian coordinate system $[X, Y, Z]$ is defined as follows:
 - **X-axis (Transverse):** Represents the body's lateral displacement relative to the radar boresight axis.
-- **Y-axis (Radial / Line of Sight - LOS):** Represents the distance from the radar (positioned at the origin $[0, 0, 0]$). A variation $\Delta Y < 0$ indicates an approach toward the radar.
+- **Y-axis (Radial / Line of Sight - LOS):** Represents the distance from the radar (positioned at $[0, 0, 1]$). A variation $\Delta Y < 0$ indicates an approach toward the radar.
 - **Z-axis (Vertical):** Represents the height above ground ($Z = 0\text{ m}$).
 
 Then we make a 3D mapping *(x,y,z)* of the 7 points evolving in time *t* for every action:
@@ -80,9 +80,38 @@ To understand what these signatures are, it helps to break down human motion int
 Because velocity determines the Doppler frequency ($f_D = \frac{2v}{\lambda}$),
 these varying velocities create distinct frequency "tracks" that orbit the main
 torso track. A foot swinging forward will generate a sudden, high-frequency spike
-(because it moves much faster than the torso), followed by a drop to zero frequency
-(when it is planted on the ground).
+(because it moves much faster than the torso), followed by a drop to zero frequency (when it is planted on the ground).
 
 Micro-Doppler signatures transform radar from a simple motion detector (which just tells you "something is there") into an advanced classification sensor (which tells you "what it is and what it is doing").
 
-#### Range-Doppler maps
+#### Range-Doppler maps and how to interpret the data from the Acconeer A121
+
+The A121 Sparse IQ data is represented by complex numbers, one for each distance
+sampled. Each number has an amplitude and a phase, the amplitude is obtained by
+taking the absolute value of the complex number and the phase is obtained by taking
+the argument of the same complex number. A sweep is a array of these complex values
+corresponding to an amplitude and phase of the reflected pulses in the configured
+range.
+
+For any given frame, we let $z(s,d)$ be the complex IQ value (point) for a sweep *s*
+and a distance point *d*.
+
+![Mocked data of an environment with a single moving object.](imgs/data_moving.png)
+
+In many cases, we want to track and/or detect moving objects in the range. This is demonstrated in the figure above, where the object has moved during the measurement of the frame. The sweeps still have roughly the same amplitude, but the phase is changing. Due to this, we can no longer coherently average the sweeps together. However, we can still (non-coherently) average the amplitudes.
+
+![A slice of the mocked data in the previous figure of an environment with a single moving object, shown in the complex plane.](imgs/data_moving_slice_polar.png)
+
+To track objects over long distances we may track the amplitude peak as it moves, but for accurately measuring finer motions we need to look at the phase.
+Over the $8$ sweeps in the example frame, the phase changed $\approx 210\deg$. A full phase rotation of $360\deg$ translates to $\frac{𝜆_{RF}}{2} \approxeq 2.5⁢mm$
+, so the $210\deg$ corresponds to $\approx 1.5 mm$.
+
+As evident from the example above, even the smallest movements change the phase and thus move the signal in the complex plane. This is utilized in for example the presence detector, which can detect the presence of humans and animals from their breathing motion.
+
+![Mocked data of a single moving object, transformed into a distance-velocity (a.k.a. range-Doppler) map.](imgs/data_range_doppler.png)
+
+As shown, the complex data can be used to track the relative movement of an object. By combining this information with the sweep rate, we can also determine its velocity. In practice, this is commonly done by applying the fast Fourier transform (FFT) to the frame over sweeps, giving a distance-velocity (a.k.a.range-Doppler) map. Each cell of the Range-Doppler map represents This method is commonly used for applications such as micro and macro gesture recognition, velocity measurements, and object tracking.
+
+### Feature extraction from Range-Doppler maps
+
+The used features for the classification of movements

@@ -8,7 +8,7 @@ FC = 60e9                 # Carrier frequency: 60 GHz
 C = 3.0e8                 # Light speed (m/s)
 WAVELENGTH = C / FC       # Wavelenght (5 mm)
 SWEEP_RATE = 400          # Sweep frequency (Hz) - slow-time
-NUM_SWEEPS_PER_FRAME = 32 # Number of sweeps for a single Range-Doppler map
+NUM_SWEEPS_PER_FRAME = 64 # Number of sweeps for a single Range-Doppler map
 RANGE_RESOLUTION = 0.025  # Resolution/distance step (2.5 cm)
 NUM_RANGE_BINS = 40       # Number of distance bins
 START_RANGE = 0.5         # Minimal measured distance (m)
@@ -22,7 +22,7 @@ ACTIONS = ["walking", "bending", "drinking", "lying", "sitting", "falling"]
 def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
     """
     Modello cinematico a 7 scatterer:
-    0: Basin (Root)
+    0: Pelvis (Root)
     1: Torso
     2: Head
     3: Right Hand
@@ -42,7 +42,7 @@ def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
     rcs = np.array([1.0, 0.8, 0.3, 0.15, 0.15, 0.2, 0.2])
     
     if action == "walking":
-        y_base = 2.5 - 0.6 * t  # Avanzamento
+        y_base = 2.5 - 0.6 * t  # Linear law by which the stickman moves forward
         # Tronco
         points[0] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.0)])  # Bacino
         points[1] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.4)])  # Torso
@@ -55,31 +55,31 @@ def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
         points[6] = np.column_stack([ 0.2*np.ones_like(t), y_base - 0.3*np.sin(2*np.pi*1.5*t), np.maximum(0, -0.2*np.cos(2*np.pi*1.5*t))])
 
     elif action == "sitting":
-        # Ci si siede fluidamente nei primi 70% del tempo
+        # It sits smoothly on the first 70% of time
         prog = np.clip(t / (duration_sec * 0.7), 0, 1)
-        # Smussamento dell'animazione (ease-in-out)
+        # Smoothening of the animation (ease-in-out)
         prog = 0.5 * (1 - np.cos(np.pi * prog))
         
         y_base = 2.0
-        # Il bacino scende e si sposta leggermente indietro
+        # The pelvis goes down and it goes a bit backwards
         points[0] = np.column_stack([np.zeros_like(t), y_base + 0.2*prog, 1.0 - 0.5*prog])
         points[1] = np.column_stack([np.zeros_like(t), y_base + 0.2*prog, 1.4 - 0.5*prog])
         points[2] = np.column_stack([np.zeros_like(t), y_base + 0.2*prog, 1.7 - 0.5*prog])
-        # Le mani si appoggiano sulle ginocchia
+        # The hands lay on the knees
         points[3] = np.column_stack([ 0.3*np.ones_like(t), y_base - 0.2*prog, 0.9 - 0.3*prog])
         points[4] = np.column_stack([-0.3*np.ones_like(t), y_base - 0.2*prog, 0.9 - 0.3*prog])
-        # I piedi restano PIANTATI a terra (Z=0, Y=avanti al bacino)
+        # Feet are always still on the ground(Z=0, Y=avanti al bacino)
         points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base - 0.3), np.zeros_like(t)])
         points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base - 0.3), np.zeros_like(t)])
 
     elif action == "bending":
-        # Piega in avanti e poi si rialza
+        # It bends down and then it gets up
         bend = np.sin(np.pi * t / duration_sec)
         y_base = 2.0
         
-        # Il bacino indietreggia leggermente per bilanciare, Z resta quasi uguale
+        # The pelvis goes slightly backwards in order to balance, Z remains almost the same
         points[0] = np.column_stack([np.zeros_like(t), y_base + 0.2*bend, 1.0 - 0.1*bend])
-        # Torso e testa si abbassano e vanno in avanti verso il radar
+        # The Torso and Head go down and move forward to the radar
         points[1] = np.column_stack([np.zeros_like(t), y_base - 0.4*bend, 1.4 - 0.6*bend])
         points[2] = np.column_stack([np.zeros_like(t), y_base - 0.7*bend, 1.7 - 0.9*bend])
         # Le mani vanno verso terra
@@ -263,7 +263,14 @@ def extract_handcrafted_features(rdm_stack, iq_data_full):
         ])
         
     # Aggregazione temporale delle feature (Media e Deviazione Standard sul campione)
+    # per far in modo che la RF abbia un dataset a lunghezza fissa:
+    # - mean_feats tells me how a feature in 'features' varies in a trial on average.
+    # - std_feat tells me how much that feature changes over time. A still posture gives constant values, 
+    #   walking and falling don't.
+    # - max_feats meybe to substitute with 90th percentile.
+
     feat_arr = np.array(features)
+    # axis=0 "collapses" the rows col by col, e.g. if I have (30,7) it becomes -> (7,)
     mean_feats = np.mean(feat_arr, axis=0)
     std_feats = np.std(feat_arr, axis=0)
     max_feats = np.max(feat_arr, axis=0)
@@ -318,8 +325,9 @@ def run_pipeline(samples_per_action):
     for label_idx, action in enumerate(ACTIONS):
         print(f"Generazione campioni per la classe: {action}...")
         for _ in range(samples_per_action):
+
             # Aggiunge una leggera variazione casuale alla durata e alla velocità del movimento
-            dur = np.random.uniform(1.8, 2.2)
+            dur = np.random.uniform(1.8, 3)
             points, rcs = generate_mocap_trajectory(action, duration_sec=dur, fs=SWEEP_RATE)
             
             # Generazione del segnale IQ
@@ -333,7 +341,7 @@ def run_pipeline(samples_per_action):
                 rdm = compute_range_doppler_map(frame_iq)
                 rdm_stack.append(rdm)
                 
-            # Estrazione feature
+            # Features and target labels
             sample_features = extract_handcrafted_features(rdm_stack,iq_data)
             X.append(sample_features)
             Y.append(label_idx)
@@ -347,10 +355,36 @@ def run_pipeline(samples_per_action):
     print(f"\nDataset Generato. Shape Matrice Features: {X.shape}, Shape Etichette: {Y.shape}")
 
     # Conversion in pandas DataFrame and saving on .csv file
-    dfx = pd.DataFrame(X)
+    dfx = pd.DataFrame(X, columns=[
+        "mean_total_energy",
+        "mean_doppler_centroid",
+        "mean_doppler_spread",
+        "mean_max_doppler_bin",
+        "mean_spectral_entropy",
+        "mean_high_doppler_ratio",
+        "mean_mean_range",
+        "std_total_energy",
+        "std_doppler_centroid",
+        "std_doppler_spread",
+        "std_max_doppler_bin",
+        "std_spectral_entropy",
+        "std_high_doppler_ratio",
+        "std_mean_range",
+        "mean_total_energy",
+        "max_doppler_centroid",
+        "max_doppler_spread",
+        "max_max_doppler_bin",
+        "max_spectral_entropy",
+        "max_high_doppler_ratio",
+        "max_mean_range",
+        "raw_mean_range", 
+        "raw_range_spread", 
+        "raw_range_span", 
+        "range_excursion"
+    ])
     dfx.to_csv('dataset-a121/synth_dataset_A121.csv', index=False)
-    dfy = pd.DataFrame(Y)
+    dfy = pd.DataFrame(Y, columns=["sequence of motions"])
     dfy.to_csv("dataset-a121/synth_dataset_A121_targets.csv", index=False)
 
 if __name__ == "__main__":
-    run_pipeline(samples_per_action=300)
+    run_pipeline(samples_per_action=200)
