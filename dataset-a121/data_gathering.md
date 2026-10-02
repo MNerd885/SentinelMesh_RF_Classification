@@ -114,4 +114,4 @@ As shown, the complex data can be used to track the relative movement of an obje
 
 ### Feature extraction from Range-Doppler maps
 
-The used features for the classification of movements
+The used features for the classification of movements are extracted from the Range-Doppler map

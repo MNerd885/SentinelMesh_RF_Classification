@@ -3,6 +3,4 @@ pandas
 numpy
 Boruta
 matplotlib
-polars
-ipykernel
-acconeer.exptool[app]
+PyQt6
