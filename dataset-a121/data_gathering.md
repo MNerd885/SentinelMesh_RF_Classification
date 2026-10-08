@@ -1,10 +1,10 @@
 # Data acquisition
 
 The acquisition flow is divided in two separate sections executed in different moments:
-  - SCRIPT A $\to$ synthetic data acqusition of the simulated motion (generated based on the parameters of the Acconeer A12)
-  - SCRIPT B $\to$ offline processing and training+testing the RF
+- SCRIPT A $\to$ synthetic data acqusition of the simulated motion (generated based on the parameters of the Acconeer A12)
+- SCRIPT B $\to$ offline processing and training+testing the RF
 The pipeline will be the following:
-        
+
 > **Kinematics Sim (inspired by MoCap DB) $\to$ Synthetic IQ signals $\to$ Range-Doppler maps $\to$ Feature extraction $\to$ RF classifier**
 
 ## SCRIPT A - Synthetic data generation
@@ -98,20 +98,50 @@ and a distance point *d*.
 
 ![Mocked data of an environment with a single moving object.](imgs/data_moving.png)
 
-In many cases, we want to track and/or detect moving objects in the range. This is demonstrated in the figure above, where the object has moved during the measurement of the frame. The sweeps still have roughly the same amplitude, but the phase is changing. Due to this, we can no longer coherently average the sweeps together. However, we can still (non-coherently) average the amplitudes.
+In many cases, we want to track and/or detect moving objects in the range. This is 
+demonstrated in the figure above, where the object has moved during the measurement 
+of the frame. The sweeps still have roughly the same amplitude, but the phase is 
+changing. Due to this, we can no longer coherently average the sweeps together. 
+However, we can still (non-coherently) average the amplitudes.
 
 ![A slice of the mocked data in the previous figure of an environment with a single moving object, shown in the complex plane.](imgs/data_moving_slice_polar.png)
 
-To track objects over long distances we may track the amplitude peak as it moves, but for accurately measuring finer motions we need to look at the phase.
-Over the $8$ sweeps in the example frame, the phase changed $\approx 210\deg$. A full phase rotation of $360\deg$ translates to $\frac{𝜆_{RF}}{2} \approxeq 2.5⁢mm$
+To track objects over long distances we may track the amplitude peak as it moves, 
+but for accurately measuring finer motions we need to look at the phase.
+Over the $8$ sweeps in the example frame, the phase changed $\approx 210\deg$. A 
+full phase rotation of $360\deg$ translates to $\frac{𝜆_{RF}}{2} \approxeq 2.5⁢mm$
 , so the $210\deg$ corresponds to $\approx 1.5 mm$.
 
-As evident from the example above, even the smallest movements change the phase and thus move the signal in the complex plane. This is utilized in for example the presence detector, which can detect the presence of humans and animals from their breathing motion.
+As evident from the example above, even the smallest movements change the phase and 
+thus move the signal in the complex plane. This is utilized in for example the 
+presence detector, which can detect the presence of humans and animals from their 
+breathing motion.
 
 ![Mocked data of a single moving object, transformed into a distance-velocity (a.k.a. range-Doppler) map.](imgs/data_range_doppler.png)
 
-As shown, the complex data can be used to track the relative movement of an object. By combining this information with the sweep rate, we can also determine its velocity. In practice, this is commonly done by applying the fast Fourier transform (FFT) to the frame over sweeps, giving a distance-velocity (a.k.a.range-Doppler) map. Each cell of the Range-Doppler map represents This method is commonly used for applications such as micro and macro gesture recognition, velocity measurements, and object tracking.
+As shown, the complex data can be used to track 
+the relative movement of an object. By combining 
+this information with the sweep rate, we can also 
+determine its velocity. In practice, this is 
+commonly done by applying the fast Fourier 
+transform (FFT) to the frame over sweeps, giving 
+a distance-velocity (a.k.a.range-Doppler) map. 
+Each cell of the Range-Doppler map represents 
+This method is commonly used for applications 
+such as micro and macro gesture recognition, 
+velocity measurements, and object tracking.
 
 ### Feature extraction from Range-Doppler maps
 
-The used features for the classification of movements are extracted from the Range-Doppler map
+> **Attention!!** A bin is a discrete "container" that groups a continuous interval of values as one entity.
+
+The used features for the classification of movements are extracted from the Range-Doppler map are the following 7:
+
+- **total_energy** -> It represents how much motion there's in total. It is the sum of all values of the Range-Doppler map. This number, after the removal of the clutter (unwanted echoes form stationary or slow-moving objects) measures the energy of what moves in the frame.
+
+- **doppler_centroid** -> It represents the direction in which the energy moves on average. It's the weighted mean of the velocities for how much energy there's at each velocity. On a scale between [-16,+15] bins;
+- **doppler_spread**
+- **max_doppler_bin**
+- **spectral_entropy** -> measures how much the movement is chaotic/ordered. On a scale of log_2(NUM_SWEEPS) = log_2 (32) = 5 bits, in [0,5], when it is 0 we have the velocity concentrated on one velocity (simple movement, regular movement); when it is 5 the energy is distirbuted among all the velocities in an almost uniform way (there's also noise).
+- **high_doppler_ratio**
+- **mean_range**

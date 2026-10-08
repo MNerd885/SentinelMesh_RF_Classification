@@ -6,7 +6,7 @@ import pandas as pd
 # =====================================================================
 FC = 60e9                 # Carrier frequency: 60 GHz
 C = 3.0e8                 # Light speed (m/s)
-WAVELENGTH = C / FC       # Wavelenght (5 mm)
+LAMBDA = C / FC       # Wavelenght (5 mm)
 SWEEP_RATE = 400          # Sweep frequency (Hz) - slow-time
 NUM_SWEEPS_PER_FRAME = 64 # Number of sweeps for a single Range-Doppler map
 RANGE_RESOLUTION = 0.025  # Resolution/distance step (2.5 cm)
@@ -151,7 +151,7 @@ def synthesize_acconeer_iq(points, rcs, range_bins=NUM_RANGE_BINS, start_range=S
             R_k = np.sqrt(pos[0]**2 + pos[1]**2 + (pos[2] - 1.0)**2)
             
             # Sfasamento coerente del segnale IQ
-            phase = -4.0 * np.pi * R_k / WAVELENGTH
+            phase = -4.0 * np.pi * R_k / LAMBDA
             complex_amplitude = (np.sqrt(rcs[k]) / (R_k**2) ) * np.exp(1j * phase)
             
             # Inviluppo dell'impulso radar gaussian-shaped lungo i range bin
@@ -189,17 +189,20 @@ def compute_range_doppler_map(iq_frame):
     """
     Calcola la Range-Doppler Map applicando la 1D-FFT lungo lo slow-time (sweep).
     """
-    # 1. Rimuove il clutter statico (sottrazione della media lungo gli sweep)
+    # 1. Removes static clutter (all stationary or slow-moving joints) (subtraction of the mean 
+    # along the sweeps/Range)
     iq_zero_mean = iq_frame - np.mean(iq_frame, axis=0, keepdims=True)
     
-    # 2. Windowing di Hann lungo lo slow-time per abbattere i lobi laterali
+    # 2. Hann's windowing along the slow-time to cut lateral lobes
     window = np.hanning(iq_frame.shape[0])[:, np.newaxis]
     iq_windowed = iq_zero_mean * window
     
-    # 3. FFT 1D lungo la dimensione degli sweep
+    # 3. 1D FFT along the sweep dimension and in this way with np.fft.fftshift I can shift the 
+    # zero-frequency component index to the center of the spectrum, useful to know if the person
+    # is going near the radar or not.
     rdm = np.fft.fftshift(np.fft.fft(iq_windowed, axis=0), axes=0)
     
-    # Power Spectral Density (Spettro di Potenza) in dB
+    # Power Spectral Density [dB] is needed to analyze the energy at each distance given a velocity.
     rdm_power = np.abs(rdm)**2
     return rdm_power
 
@@ -223,32 +226,43 @@ def extract_handcrafted_features(rdm_stack, iq_data_full):
         if total_energy == 0:
             total_energy = 1e-12
         
-        # Proiezione lungo l'asse Doppler e l'asse Range
-        doppler_profile = np.sum(rdm, axis=1) # Asse 0: Doppler
-        range_profile = np.sum(rdm, axis=0)   # Asse 1: Range
+        # Projection over the Doppler and Range axes: "how much energy there's at each velocity/distance
+        # by summing all the distances/velocitites"
+        doppler_profile = np.sum(rdm, axis=1) # 0 axis: Doppler
+        range_profile = np.sum(rdm, axis=0)   # 1 axis: Range
         
-        # Normalizzazione probabilità
+        # Profiles normalization
         p_doppler = doppler_profile / np.sum(doppler_profile)
         p_range = range_profile / np.sum(range_profile)
         
         # Feature Doppler
         num_doppler_bins = len(doppler_profile)
+        # In this way I subdivide the bins such that I have the bin corresponding to
+        # 0 velocity at the center (index = 16), the negative bins indicate that I'm moving farther from
+        # the radar, the others indicate that I'm moving to the radar.
         doppler_bins = np.arange(-num_doppler_bins//2, num_doppler_bins//2)
-        
+
+        # It represents the centroid for each doppler bin which is weighted by how much energy there's in that
+        # particular bin
         doppler_centroid = np.sum(doppler_bins * p_doppler)
+        # This represent how much a bin deviates from the found centroid fro that bin
         doppler_spread = np.sqrt(np.sum(((doppler_bins - doppler_centroid)**2) * p_doppler))
+        # Represents the greatest velocity in that frame
         max_doppler_bin = doppler_bins[np.argmax(doppler_profile)]
         
-        # Entropia spettrale (misura la turbolenza/complessità del movimento)
+        # Spectral entropy: measures how much the movement is chaotic/ordered. On a scale of log_2 (NUM_SWEEPS) = log_2 (32) = 5 bits,
+        # in [0,5], when it is 0 we have the velocity concentrated on one velocity (simple movement, regular movement);when it is 5 the 
+        # energy is distirbuted among all the velocities in an almost uniform way (there's also noise).
         spectral_entropy = -np.sum(p_doppler * np.log2(p_doppler + 1e-12))
         
-        # High Doppler Energy Ratio (Fondamentale per identificare le CADUTE)
+        # High Doppler Energy Ratio (fundamental to identify FALLS) indicates which movement fraction is really fast.
         high_doppler_mask = np.abs(doppler_bins) > (num_doppler_bins * 0.25)
         high_doppler_ratio = np.sum(doppler_profile[high_doppler_mask]) / total_energy
         
-        # Feature Spaziali (Range) - calcolate dalla RDM (post clutter-removal):
-        # utili come proxy di "dove si trova ciò che si muove", non come
-        # estensione spaziale del corpo (per quella vedi raw_* più sotto).
+        # Spatial features (Range) - computed from the RDM (post-clutter removal):
+        # useful as a proxy (a measured quantity which is not the one I want to measure, but it's correlated)
+        # of "where the thing that is moving is", not a spatial extension of the body (for that there's the 
+        # raw profile below).
         range_bins_idx = np.arange(len(range_profile))
         mean_range = np.sum(range_bins_idx * p_range)
         
@@ -267,7 +281,7 @@ def extract_handcrafted_features(rdm_stack, iq_data_full):
     # - mean_feats tells me how a feature in 'features' varies in a trial on average.
     # - std_feat tells me how much that feature changes over time. A still posture gives constant values, 
     #   walking and falling don't.
-    # - max_feats meybe to substitute with 90th percentile.
+    # - max_feats tells me the most extreme moment. For example the the subkìject falls (maybe to be substituted with something else).
 
     feat_arr = np.array(features)
     # axis=0 "collapses" the rows col by col, e.g. if I have (30,7) it becomes -> (7,)
