@@ -6,20 +6,18 @@ import pandas as pd
 import numpy as np
 
 ACTIONS = ["walking", "bending", "drinking", "lying", "sitting", "falling"]
-
-oobscore = []
+MIN_LEAF = 5
 
 X = pd.read_csv("dataset-a121/synth_dataset_A121.csv")
 Y = pd.read_csv("dataset-a121/synth_dataset_A121_targets.csv")
 
 # Split Train/Test
-X_train, X_test, y_train, y_test= train_test_split(X, Y, test_size=0.3, stratify=Y)
+X_train, X_test, y_train, y_test= train_test_split(X, Y, test_size=0.3, stratify=Y, random_state=36)
 
-print("\n--- Addestramento Classificatore Random Forest ---")
+print("\n--- Training of the RF classifier ---")
 
-clf = RandomForestClassifier(n_estimators=200, max_depth=20, random_state=38,min_samples_leaf=30, bootstrap=True, oob_score=True)
+clf = RandomForestClassifier(n_estimators=5,max_depth=10, warm_start=True, random_state=38, min_samples_leaf=MIN_LEAF, bootstrap=True)
 clf.fit(X_train, y_train)
-
 
 # Testing on the model
 y_pred = clf.predict(X_test)
@@ -35,9 +33,11 @@ cfm_norm = cfm.astype("float") / cfm.sum(axis=1)[:, np.newaxis]
 
 # Plot confusion matrix on the test dataset
 fig, ax = plt.subplots(figsize=(8, 6))
-disp = ConfusionMatrixDisplay(confusion_matrix=cfm_norm, display_labels=ACTIONS, )
+disp = ConfusionMatrixDisplay(confusion_matrix=cfm_norm, display_labels=ACTIONS)
 disp.plot(cmap=plt.cm.Blues, ax=ax, xticks_rotation=45)
 
 plt.title("Confusion Matrix")
 plt.tight_layout()
 plt.show()
+
+# Trained model dump in order to be loaded into the MCU

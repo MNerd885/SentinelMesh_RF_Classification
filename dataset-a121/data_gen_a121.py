@@ -6,22 +6,30 @@ import pandas as pd
 # =====================================================================
 FC = 60e9                 # Carrier frequency: 60 GHz
 C = 3.0e8                 # Light speed (m/s)
-LAMBDA = C / FC       # Wavelenght (5 mm)
-SWEEP_RATE = 400          # Sweep frequency (Hz) - slow-time
-NUM_SWEEPS_PER_FRAME = 64 # Number of sweeps for a single Range-Doppler map
-RANGE_RESOLUTION = 0.025  # Resolution/distance step (2.5 cm)
-NUM_RANGE_BINS = 40       # Number of distance bins
-START_RANGE = 0.5         # Minimal measured distance (m)
+LAMBDA = C / FC           # Wavelenght (5 mm)
+FRAME_RATE = 10.0         # Hz - how often the radar wakes up and measures a frame (HW limit: 5Hz min - 10 Hz max)
+SWEEP_RATE = 1000         # Hz - slow-time rate of the sweeps INSIDE one frame (burst). Sets max
+                          # unambiguous speed: v_max = SWEEP_RATE * LAMBDA / 4  (=1.25 m/s @ 1 kHz)
+NUM_SWEEPS_PER_FRAME = 8  # Sweeps per frame (= Doppler bins of the Range-Doppler map)
+
+
+# --- Range configuration + sensor buffer budget ---
+NUM_RANGE_BINS = 16     # Number of distance bins
+START_RANGE = 0.8         # Minimal measured distance (m)
+RANGE_STEP = 0.14         # Distance between points (m) -> window 0.8 .. 2.9 m, covers the whole scene
+PULSE_SIGMA = 1.2 * RANGE_STEP  # Pulse width, matched to the step (as the profile would be chosen on the A121)
+BYTES_PER_POINT = 4       # Complex int16 (I + Q): acc_int16_complex_t in the Acconeer SDK (not in the datasheet)
+BUFFER_BYTES = 512        # Self-imposed budget per frame (the A121 sensor buffer holds up to 4095 points)
 NOISE_STD = 0.05          # Std deviation of thermal noise/AWGN phase
 
 ACTIONS = ["walking", "bending", "drinking", "lying", "sitting", "falling"]
 
 # =====================================================================
-# 2. SIMULATORE CINEMATICO (STILE CMU MOCAP DATASET)
+# 2. KINEMATIC SIMULATOR (CMU MOCAP DATASET STYLE)
 # =====================================================================
 def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
     """
-    Modello cinematico a 7 scatterer:
+    Kinematic model with 7 scatterers:
     0: Pelvis (Root)
     1: Torso
     2: Head
@@ -34,7 +42,7 @@ def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
     num_samples = int(duration_sec * fs)
     t = np.linspace(0, duration_sec, num_samples)
 
-    # A 3D matrix 7x250x3 containing for every point i its evolution for a time of num_samples
+    # A 3D matrix 7xnum_samplesx3 containing for every point i its evolution for a time of num_samples
     # given by the evolution of three coordinates (x,y,z)
     points = np.zeros((7, num_samples, 3))
 
@@ -43,14 +51,14 @@ def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
     
     if action == "walking":
         y_base = 2.5 - 0.6 * t  # Linear law by which the stickman moves forward
-        # Tronco
-        points[0] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.0)])  # Bacino
+        # Trunk
+        points[0] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.0)])  # Pelvis
         points[1] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.4)])  # Torso
-        points[2] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.7)])  # Testa
-        # Mani (oscillano in controfase)
+        points[2] = np.column_stack([np.zeros_like(t), y_base, np.full_like(t, 1.7)])  # Head
+        # Hands (swing in antiphase)
         points[3] = np.column_stack([ 0.3*np.ones_like(t), y_base + 0.3*np.cos(2*np.pi*1.5*t), 0.9 - 0.1*np.sin(2*np.pi*1.5*t)])
         points[4] = np.column_stack([-0.3*np.ones_like(t), y_base - 0.3*np.cos(2*np.pi*1.5*t), 0.9 + 0.1*np.sin(2*np.pi*1.5*t)])
-        # Piedi (passi alternati, non scendono sotto Z=0)
+        # Feet (alternating steps, never go below Z=0)
         points[5] = np.column_stack([-0.2*np.ones_like(t), y_base + 0.3*np.sin(2*np.pi*1.5*t), np.maximum(0, 0.2*np.cos(2*np.pi*1.5*t))])
         points[6] = np.column_stack([ 0.2*np.ones_like(t), y_base - 0.3*np.sin(2*np.pi*1.5*t), np.maximum(0, -0.2*np.cos(2*np.pi*1.5*t))])
 
@@ -68,7 +76,7 @@ def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
         # The hands lay on the knees
         points[3] = np.column_stack([ 0.3*np.ones_like(t), y_base - 0.2*prog, 0.9 - 0.3*prog])
         points[4] = np.column_stack([-0.3*np.ones_like(t), y_base - 0.2*prog, 0.9 - 0.3*prog])
-        # Feet are always still on the ground(Z=0, Y=avanti al bacino)
+        # Feet are always still on the ground(Z=0, Y=in front of the pelvis)
         points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base - 0.3), np.zeros_like(t)])
         points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base - 0.3), np.zeros_like(t)])
 
@@ -82,17 +90,17 @@ def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
         # The Torso and Head go down and move forward to the radar
         points[1] = np.column_stack([np.zeros_like(t), y_base - 0.4*bend, 1.4 - 0.6*bend])
         points[2] = np.column_stack([np.zeros_like(t), y_base - 0.7*bend, 1.7 - 0.9*bend])
-        # Le mani vanno verso terra
+        # The hands go towards the ground
         points[3] = np.column_stack([ 0.2*np.ones_like(t), y_base - 0.6*bend, 0.9 - 0.7*bend])
         points[4] = np.column_stack([-0.2*np.ones_like(t), y_base - 0.6*bend, 0.9 - 0.7*bend])
-        # Piedi fermi a terra
+        # Feet still on the ground
         points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
         points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
 
     elif action == "falling":
-        # Caduta in avanti accelerata dalla gravità
+        # Forward fall accelerated by gravity
         fall_t = np.clip((t - 0.3) * 1.5, 0, 1)
-        fall_prog = fall_t ** 2  # Accelerazione
+        fall_prog = fall_t ** 2  # Acceleration
         y_base = 2.0
         
         points[0] = np.column_stack([np.zeros_like(t), y_base - 0.8*fall_prog, 1.0 - 0.8*fall_prog])
@@ -100,32 +108,32 @@ def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
         points[2] = np.column_stack([np.zeros_like(t), y_base - 1.7*fall_prog, 1.7 - 1.5*fall_prog])
         points[3] = np.column_stack([ 0.4*np.ones_like(t), y_base - 1.4*fall_prog, 0.9 - 0.7*fall_prog])
         points[4] = np.column_stack([-0.4*np.ones_like(t), y_base - 1.4*fall_prog, 0.9 - 0.7*fall_prog])
-        # Piedi fermi (fanno da perno alla caduta)
+        # Feet still (they act as the pivot of the fall)
         points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
         points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
 
     elif action == "lying":
-        # Soggetto disteso a terra con micro-respirazione sul torso a 0.3Hz
+        # Subject lying on the ground with micro-breathing on the torso at 0.3Hz
         y_base = 1.0
         breath = 0.02 * np.sin(2 * np.pi * 0.3 * t)
         
-        points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.1)]) # Piedi vicini al radar
+        points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.1)]) # Feet close to the radar
         points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.1)])
-        points[0] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 0.9), np.full_like(t, 0.1)]) # Bacino
-        points[1] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 1.4), 0.1 + breath]) # Torso respira
+        points[0] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 0.9), np.full_like(t, 0.1)]) # Pelvis
+        points[1] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 1.4), 0.1 + breath]) # Torso breathes
         points[3] = np.column_stack([ 0.4*np.ones_like(t), np.full_like(t, y_base + 1.3), np.full_like(t, 0.1)])
         points[4] = np.column_stack([-0.4*np.ones_like(t), np.full_like(t, y_base + 1.3), np.full_like(t, 0.1)])
-        points[2] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 1.7), np.full_like(t, 0.1)]) # Testa
+        points[2] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base + 1.7), np.full_like(t, 0.1)]) # Head
         
     elif action == "drinking":
-        # Solo il braccio si muove verso la testa
+        # Only the arm moves towards the head
         y_base = 2.0
         drink = np.sin(np.pi * 1.5 * t / duration_sec)
         
         points[0] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base), np.full_like(t, 1.0)])
         points[1] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base), np.full_like(t, 1.4)])
         points[2] = np.column_stack([np.zeros_like(t), np.full_like(t, y_base), np.full_like(t, 1.7)])
-        points[3] = np.column_stack([0.2*(1-drink), y_base - 0.2*drink, 0.9 + 0.7*drink]) # Mano DX va alla bocca
+        points[3] = np.column_stack([0.2*(1-drink), y_base - 0.2*drink, 0.9 + 0.7*drink]) # Right hand goes to the mouth
         points[4] = np.column_stack([-0.3*np.ones_like(t), np.full_like(t, y_base), np.full_like(t, 0.9)])
         points[5] = np.column_stack([-0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
         points[6] = np.column_stack([ 0.2*np.ones_like(t), np.full_like(t, y_base), np.zeros_like(t)])
@@ -133,61 +141,116 @@ def generate_mocap_trajectory(action: str, duration_sec : float, fs :float):
     return points, rcs
 
 # =====================================================================
-# 3. GENERAZIONE SEGNALE IQ SINTETICO ACCONEER A121
+# 3. ACCONEER A121 SYNTHETIC IQ SIGNAL GENERATION
 # =====================================================================
-def synthesize_acconeer_iq(points, rcs, range_bins=NUM_RANGE_BINS, start_range=START_RANGE, res=RANGE_RESOLUTION):
-    """
-    Modella il segnale IQ acquisito dal radar Acconeer A121.
-    S(sweep, range_bin) = Sum_k [ sqrt(RCS_k) * exp(-j * 4 * pi * R_k / lambda) * pulse_envelope ]
-    """
-    num_scatterers, num_sweeps, _ = points.shape
-    range_axis = start_range + np.arange(range_bins) * res
-    iq_matrix = np.zeros((num_sweeps, range_bins), dtype=complex)
+def check_hardware_budget():
+    """Fails if the configuration does not fit the hardware constraints, prints a summary."""
+    n_points = NUM_SWEEPS_PER_FRAME * NUM_RANGE_BINS
+    n_bytes = n_points * BYTES_PER_POINT
+    assert n_bytes <= BUFFER_BYTES, f"Frame = {n_bytes} B > buffer budget {BUFFER_BYTES} B"
+    assert SWEEP_RATE % FRAME_RATE == 0, "SWEEP_RATE must be a multiple of FRAME_RATE"
+    assert NUM_SWEEPS_PER_FRAME / SWEEP_RATE <= 1.0 / FRAME_RATE, "Burst longer than the frame period"
+ 
+    v_max = SWEEP_RATE * LAMBDA / 4.0
+    v_res = (SWEEP_RATE / NUM_SWEEPS_PER_FRAME) * LAMBDA / 2.0
+    stop_range = START_RANGE + (NUM_RANGE_BINS - 1) * RANGE_STEP
+    print(f"Frame: {NUM_SWEEPS_PER_FRAME} sweeps x {NUM_RANGE_BINS} points = {n_points} points = {n_bytes} B (budget {BUFFER_BYTES} B)")
+    print(f"Frame rate {FRAME_RATE:g} Hz | burst {1e3*NUM_SWEEPS_PER_FRAME/SWEEP_RATE:.1f} ms @ {SWEEP_RATE} Hz sweep rate")
+    print(f"Doppler: v_max = +/-{v_max:.2f} m/s, resolution = {v_res:.3f} m/s per bin")
+    print(f"Range window: {START_RANGE:.2f} .. {stop_range:.2f} m, step {100*RANGE_STEP:.0f} cm")
 
-    for idx_sweep in range(num_sweeps):
-        for k in range(num_scatterers):
-            pos = points[k, idx_sweep, :]
-            # Distanza euclidea dal radar fisso situato in (0,0,1.0)
-            R_k = np.sqrt(pos[0]**2 + pos[1]**2 + (pos[2] - 1.0)**2)
-            
-            # Sfasamento coerente del segnale IQ
-            phase = -4.0 * np.pi * R_k / LAMBDA
-            complex_amplitude = (np.sqrt(rcs[k]) / (R_k**2) ) * np.exp(1j * phase)
-            
-            # Inviluppo dell'impulso radar gaussian-shaped lungo i range bin
-            pulse_envelope = np.exp(-0.5 * ((range_axis - R_k) / (res * 1.2)) ** 2)
-            
-            iq_matrix[idx_sweep, :] += complex_amplitude * pulse_envelope
 
-    # Aggiunta rumore termico/fase AWGN
+def synthesize_acconeer_iq(points, rcs):
+    """
+    Models the IQ signal acquired by the Acconeer A121 as a sequence of FRAMES.
+    The radar wakes up every 1/FRAME_RATE s and measures a burst of NUM_SWEEPS_PER_FRAME
+    consecutive sweeps spaced by 1/SWEEP_RATE s; between frames nothing is measured.
+    S(sweep, range_bin) = Sum_k [ sqrt(RCS_k)/R_k^2 * exp(-j * 4 * pi * R_k / lambda) * pulse_envelope ]
+ 
+    points: (7, num_samples, 3) trajectory sampled at SWEEP_RATE.
+    Returns the IQ array with shape (num_frames, NUM_SWEEPS_PER_FRAME, NUM_RANGE_BINS).
+    """
+    num_samples = points.shape[1]
+    # how many trajectory samples are between two frames start point
+    num_s_2frames = int(round(SWEEP_RATE / FRAME_RATE))
+    num_frames = (num_samples - NUM_SWEEPS_PER_FRAME) // num_s_2frames + 1
+    
+    # Index of the trajectory sample used by sweep s of frame f: (f, s), so we obtain a matrix of framexsweep
+    # in this way I extract only the samples acquired when the radar is up.
+    # It is done by summing the column np.arange(num_frames)[:, None] * num_s_2frames to
+    # the row np.arange(NUM_SWEEPS_PER_FRAME)[None, :]
+    idx = np.arange(num_frames)[:, None] * num_s_2frames + np.arange(NUM_SWEEPS_PER_FRAME)[None, :]
+    
+    # By putting idx in the points of the movements I obtain the following structure
+    # (Scatterer, f, s, (x,y,z))
+    pos = points[:, idx, :]                                    
+
+    # Euclidean distance from the radar positioned at (0,0,1.0)
+    R = np.sqrt(pos[...,0]**2 + pos[...,1]**2 + (pos[...,2] - 1.0)**2) # (Scatterer, f, s)
+    
+    # Coherent IQ amplitude/phase of each scatterer
+    phase = -4.0 * np.pi * R / LAMBDA
+    complex_amplitude = (np.sqrt(rcs)[:, None, None] / R**2) * np.exp(1j * phase)  # (K, F, S)
+    
+    # Gaussian-shaped radar pulse envelope along the range points
+    range_axis = START_RANGE + np.arange(NUM_RANGE_BINS) * RANGE_STEP       # range bins(B,)
+    # range_axis - R[..., None] calculates the distance of every scatterer from every bin, the result
+    # has the form # (K, F, S, B) --> (Scatterer, f, s, B)
+    pulse_envelope = np.exp(-0.5 * ((range_axis - R[..., None]) / PULSE_SIGMA) ** 2)  # (K, F, S, B)
+    # Here I sum the 7 contribuitions as complex values. If two points fall on the same bin
+    # they can interfere, as in a real radar.
+    iq_matrix = np.sum(complex_amplitude[..., None] * pulse_envelope, axis=0)   # (f, s, B)
+
+    # QUICK Note: In NumPy, the expression arr[..., None] (or arr[:, None]) uses None as 
+    # an alias for np.newaxis to add a new axis of length 1 to the array. 
+    # This operation is primarily used to enable broadcasting between arrays of 
+    # different dimensions.  For example, if you have a 1D array and want to perform 
+    # an operation with a 2D array, adding None reshapes the 1D array to a column 
+    # vector (or row vector) so that NumPy can automatically expand it to match the 
+    # other array's shape without explicit loops or reshape calls.
+
+
+    # Adding thermal noise / AWGN additive noise
     noise = (np.random.normal(0, NOISE_STD, iq_matrix.shape) + 
              1j * np.random.normal(0, NOISE_STD, iq_matrix.shape))
     return iq_matrix + noise
 
+def range_window_coverage(points, rcs):
+    """Fraction of the received power (~RCS/R^4) whose scatterers fall inside the range window."""
+    R = np.sqrt(points[..., 0]**2 + points[..., 1]**2 + (points[..., 2] - 1.0)**2)
+
+    stop_range = START_RANGE + (NUM_RANGE_BINS - 1) * RANGE_STEP
+
+    inside = (R >= START_RANGE - PULSE_SIGMA) & (R <= stop_range + PULSE_SIGMA)
+
+    w = rcs[:, None] / R**4
+
+    return float((w * inside).sum() / w.sum())
+
 # =====================================================================
-# 3.5. PROFILO DI RANGE GREZZO (NESSUN CLUTTER REMOVAL)
+# 3.5. RAW RANGE PROFILE (NO CLUTTER REMOVAL)
 # =====================================================================
 def compute_raw_range_profile(iq_data_full):
     """
-    Profilo di riflettività per range bin calcolato SENZA sottrazione
-    della media lungo lo slow-time. A differenza della Range-Doppler Map
-    (pensata per isolare il moto), questo profilo preserva l'estensione
-    spaziale del corpo, inclusi gli scatterer perfettamente fermi che la
-    clutter removal cancellerebbe.
+    Reflectivity profile per range bin computed WITHOUT subtracting the
+    mean along the slow-time. Unlike the Range-Doppler Map (designed to
+    isolate motion), this profile preserves the spatial extent of the
+    body, including perfectly still scatterers that clutter removal
+    would cancel.
  
-    iq_data_full: matrice IQ dell'intero trial (tutti gli sweep), non un
-    singolo frame — la posizione del corpo non cambia frame-per-frame
-    come il Doppler, quindi mediare su più sweep dà anche una stima più
-    pulita rispetto al rumore.
+    iq_data_full: IQ matrix of the entire trial (all sweeps), not a
+    single frame — the body position does not change frame-by-frame
+    like the Doppler does, so averaging over more sweeps also gives a
+    cleaner estimate with respect to noise.
     """
     return np.mean(np.abs(iq_data_full) ** 2, axis=0)
 
 # =====================================================================
-# 4. TRASFORMATA RANGE-DOPPLER (RDM)
+# 4. RANGE-DOPPLER TRANSFORM (RDM)
 # =====================================================================
 def compute_range_doppler_map(iq_frame):
     """
-    Calcola la Range-Doppler Map applicando la 1D-FFT lungo lo slow-time (sweep).
+    Computes the Range-Doppler Map by applying a 1D FFT along the slow-time (sweeps).
     """
     # 1. Removes static clutter (all stationary or slow-moving joints) (subtraction of the mean 
     # along the sweeps/Range)
@@ -208,16 +271,16 @@ def compute_range_doppler_map(iq_frame):
 
 
 # =====================================================================
-# 5. ESTRAZIONE DELLE FEATURE (HAND-CRAFTED FEATURES)
+# 5. FEATURE EXTRACTION (HAND-CRAFTED FEATURES)
 # =====================================================================
 def extract_handcrafted_features(rdm_stack, iq_data_full):
     """
-    Estrae feature rilevanti da:
-    - una sequenza temporale di Mappe Range-Doppler (rdm_stack) -> feature
-      di MOTO (Doppler), calcolate per frame e aggregate su mean/std/max;
-    - il segnale IQ grezzo dell'intero trial (iq_data_full) -> feature di
-      POSIZIONE/POSTURA, calcolate una sola volta per trial, perché la
-      RDM ha già cancellato l'informazione spaziale statica.
+    Extracts relevant features from:
+    - a temporal sequence of Range-Doppler Maps (rdm_stack) -> MOTION
+      (Doppler) features, computed per frame and aggregated as mean/std/max;
+    - the raw IQ signal of the entire trial (iq_data_full) -> POSITION/POSTURE
+      features, computed only once per trial, because the RDM has already
+      cancelled the static spatial information.
     """
     features = []
     
@@ -235,11 +298,12 @@ def extract_handcrafted_features(rdm_stack, iq_data_full):
         p_doppler = doppler_profile / np.sum(doppler_profile)
         p_range = range_profile / np.sum(range_profile)
         
-        # Feature Doppler
+        # Doppler features
         num_doppler_bins = len(doppler_profile)
         # In this way I subdivide the bins such that I have the bin corresponding to
-        # 0 velocity at the center (index = 16), the negative bins indicate that I'm moving farther from
-        # the radar, the others indicate that I'm moving to the radar.
+        # 0 velocity at the center (index = 16), the negative bins indicate that I'm 
+        # moving farther from the radar, the others indicate that I'm moving 
+        # to the radar.
         doppler_bins = np.arange(-num_doppler_bins//2, num_doppler_bins//2)
 
         # It represents the centroid for each doppler bin which is weighted by how much energy there's in that
@@ -276,12 +340,12 @@ def extract_handcrafted_features(rdm_stack, iq_data_full):
             mean_range
         ])
         
-    # Aggregazione temporale delle feature (Media e Deviazione Standard sul campione)
-    # per far in modo che la RF abbia un dataset a lunghezza fissa:
+    # Temporal aggregation of the features (Mean and Standard Deviation over the sample)
+    # so that the RF gets a fixed-length dataset:
     # - mean_feats tells me how a feature in 'features' varies in a trial on average.
     # - std_feat tells me how much that feature changes over time. A still posture gives constant values, 
     #   walking and falling don't.
-    # - max_feats tells me the most extreme moment. For example the the subkìject falls (maybe to be substituted with something else).
+    # - max_feats tells me the most extreme moment. For example the the subject falls (maybe to be substituted with something else).
 
     feat_arr = np.array(features)
     # axis=0 "collapses" the rows col by col, e.g. if I have (30,7) it becomes -> (7,)
@@ -289,22 +353,24 @@ def extract_handcrafted_features(rdm_stack, iq_data_full):
     std_feats = np.std(feat_arr, axis=0)
     max_feats = np.max(feat_arr, axis=0)
     
-    # --- Feature di POSTURA, dal profilo di range grezzo (una volta per trial) ---
+    # --- POSTURE features, from the raw range profile (once per trial) ---
     raw_profile = compute_raw_range_profile(iq_data_full)
     
-    # Normalizzazione probabilità
+    # Probability normalization
     p_raw = raw_profile / np.sum(raw_profile)
     
     raw_idx = np.arange(len(raw_profile))
  
     raw_mean_range = np.sum(raw_idx * p_raw)
     raw_range_spread = np.sqrt(np.sum(((raw_idx - raw_mean_range) ** 2) * p_raw))
-    occupied = raw_idx[raw_profile > 0.05 * raw_profile.max()]
+    # soglia al 5% del picco: isola solo i bin con riflessione reale
+    occupied = raw_idx[raw_profile > 0.05 * raw_profile.max()] 
+    # estensione fisica occupata
     raw_range_span = occupied.max() - occupied.min() if occupied.size else 0
  
-    # Escursione del "centro di massa" del moto nel corso del trial
-    # (colonna 6 = mean_range per frame): cattura oscillazioni (drinking)
-    # e spostamenti monotoni (falling/sitting) allo stesso modo.
+    # Excursion of the motion's "center of mass" over the trial
+    # (column 6 = mean_range per frame): captures oscillations (drinking)
+    # and monotonic shifts (falling/sitting) alike.
     range_excursion = feat_arr[:, 6].max() - feat_arr[:, 6].min()
  
     posture_feats = np.array([raw_mean_range, raw_range_spread, raw_range_span, range_excursion])
@@ -312,16 +378,16 @@ def extract_handcrafted_features(rdm_stack, iq_data_full):
     return np.hstack([mean_feats, std_feats, max_feats, posture_feats])
 
 # =====================================================================
-# 6. ESECUZIONE PIPELINE COMPLETA E CREAZIONE DATASET
+# 6. FULL PIPELINE EXECUTION AND DATASET CREATION
 # =====================================================================
 def inspect_features_by_class(X, y):
     """
-    Diagnostica rapida: confronta mean/std/max delle feature per classe.
-    Indici delle feature per frame (7 totali): 
+    Quick diagnostics: compares mean/std/max of the features per class.
+    Per-frame feature indices (7 in total): 
     0=total_energy, 1=doppler_centroid, 2=doppler_spread, 3=max_doppler_bin,
     4=spectral_entropy, 5=high_doppler_ratio, 6=mean_range (post clutter-removal)
-    Nel vettore finale: mean=0-6, std=7-13, max=14-20,
-    poi 21=raw_mean_range, 22=raw_range_spread, 23=raw_range_span, 24=range_excursion
+    In the final vector: mean=0-6, std=7-13, max=14-20,
+    then 21=raw_mean_range, 22=raw_range_spread, 23=raw_range_span, 24=range_excursion
     """
     for label_idx, action in enumerate(ACTIONS):
         mask = (y == label_idx)
@@ -332,28 +398,32 @@ def inspect_features_by_class(X, y):
               f"range_excursion={X[mask,24].mean():6.3f}")
 
 def run_pipeline(samples_per_action):
+
+    check_hardware_budget()
+    
     print("--- 1. Generazione Dataset Sintetico Acconeer A121 ---")
     X = []
     Y = []
     
     for label_idx, action in enumerate(ACTIONS):
         print(f"Generazione campioni per la classe: {action}...")
-        for _ in range(samples_per_action):
+        for n in range(samples_per_action):
 
-            # Aggiunge una leggera variazione casuale alla durata e alla velocità del movimento
+            # Adds a slight random variation to the duration and speed of the movement
             dur = np.random.uniform(1.8, 3)
             points, rcs = generate_mocap_trajectory(action, duration_sec=dur, fs=SWEEP_RATE)
+
+            if n == 0:
+                print(f"    potenza nella finestra di range: {100*range_window_coverage(points, rcs):.0f}%")
             
-            # Generazione del segnale IQ
+            # IQ signal generation
             iq_data = synthesize_acconeer_iq(points, rcs)
             
-            # Segmentazione in frame consecutivi per le Range-Doppler Maps
-            rdm_stack = []
-            num_frames = iq_data.shape[0] // NUM_SWEEPS_PER_FRAME
-            for f in range(num_frames):
-                frame_iq = iq_data[f*NUM_SWEEPS_PER_FRAME : (f+1)*NUM_SWEEPS_PER_FRAME, :]
-                rdm = compute_range_doppler_map(frame_iq)
-                rdm_stack.append(rdm)
+            # Segmentation into consecutive frames for the Range-Doppler Maps
+            rdm_stack = [compute_range_doppler_map(frame_iq) for frame_iq in iq_data]
+
+            # Raw IQ of the trial (all measured sweeps) for the posture features
+            iq_data = iq_data.reshape(-1, NUM_RANGE_BINS)
                 
             # Features and target labels
             sample_features = extract_handcrafted_features(rdm_stack,iq_data)
@@ -363,7 +433,7 @@ def run_pipeline(samples_per_action):
     X = np.array(X)
     Y = np.array(Y)
 
-    # Diagnostica movimenti
+    # Motion diagnostics
     inspect_features_by_class(X,Y)
     
     print(f"\nDataset Generato. Shape Matrice Features: {X.shape}, Shape Etichette: {Y.shape}")
@@ -384,7 +454,7 @@ def run_pipeline(samples_per_action):
         "std_spectral_entropy",
         "std_high_doppler_ratio",
         "std_mean_range",
-        "mean_total_energy",
+        "max_total_energy",
         "max_doppler_centroid",
         "max_doppler_spread",
         "max_max_doppler_bin",
@@ -396,9 +466,9 @@ def run_pipeline(samples_per_action):
         "raw_range_span", 
         "range_excursion"
     ])
-    dfx.to_csv('dataset-a121/synth_dataset_A121.csv', index=False)
+    dfx.to_csv('dataset-a121/synth_dataset_A121_2.csv', index=False)
     dfy = pd.DataFrame(Y, columns=["sequence of motions"])
-    dfy.to_csv("dataset-a121/synth_dataset_A121_targets.csv", index=False)
+    dfy.to_csv("dataset-a121/synth_dataset_A121_targets_2.csv", index=False)
 
 if __name__ == "__main__":
-    run_pipeline(samples_per_action=200)
+    run_pipeline(samples_per_action=80)

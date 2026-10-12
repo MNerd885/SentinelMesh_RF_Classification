@@ -1,6 +1,7 @@
 # Data acquisition
 
 The acquisition flow is divided in two separate sections executed in different moments:
+
 - SCRIPT A $\to$ synthetic data acqusition of the simulated motion (generated based on the parameters of the Acconeer A12)
 - SCRIPT B $\to$ offline processing and training+testing the RF
 The pipeline will be the following:
@@ -11,7 +12,7 @@ The pipeline will be the following:
 
 ### Kinematics simulation of the 6 motions
 
-In this section I simulate all the 6 motions: walking, bending, drinking, lying, sitting and falling. What I do, since I don't have real data, is to implement this function which represents the human body as 7 scatterer points: Pelvis (Root), Torso, Head, Right Hand, Left Hand, Right leg, Left leg.
+In this section I simulate all the 6 motions: walking, bending, drinking, lying, sitting and falling. What I do, since I don't have real data, is to implement this function which represents the human body as 7 scatterer points: Pelvis (Root), Torso, Head, Right Hand, Left Hand, Right leg, Left leg (reference of the idea [CMU Graphics Lab Motion Capture Database](https://mocap.cs.cmu.edu/)).
 
 I assign a **RCS (Radar Cross Section)** in order to have a different electromagnetic 
 reflection in every body part. For example the Torso has a much bigger surface and 
@@ -21,11 +22,13 @@ for this idea is [Chen, V. C. (2019). The Micro-Doppler Effect in Radar (2nd ed.
 #### 3D Reference System Convention
 
 The Cartesian coordinate system $[X, Y, Z]$ is defined as follows:
+
 - **X-axis (Transverse):** Represents the body's lateral displacement relative to the radar boresight axis.
 - **Y-axis (Radial / Line of Sight - LOS):** Represents the distance from the radar (positioned at $[0, 0, 1]$). A variation $\Delta Y < 0$ indicates an approach toward the radar.
 - **Z-axis (Vertical):** Represents the height above ground ($Z = 0\text{ m}$).
 
 Then we make a 3D mapping *(x,y,z)* of the 7 points evolving in time *t* for every action:
+
 - **Walking:** Models a coordinated rectilinear translation toward the radar with periodic strides.
   - **Pelvis (0 - Root), Torso (1), Head (2):** Move continuously and uniformly along the Y-axis toward the radar at an average speed of $0.6\text{ m/s}$. Vertical heights ($Z$) remain constant at $1.0\text{ m}$ (pelvis), $1.4\text{ m}$ (torso), and $1.7\text{ m}$ (head), respectively.
   - **Hands (3, 4):** Translate globally along $Y$ together with the trunk, adding a periodic harmonic anti-phase oscillation along $Y$ (natural arm swing at $1.5\text{ Hz}$).
@@ -64,7 +67,7 @@ Then we make a 3D mapping *(x,y,z)* of the 7 points evolving in time *t* for eve
 ### Simulation IQ signal from the Acconeer A121
 
 TheAcconeer A121 is a **Pulsed Coherent Radar (PCR)** operating in the V-Band
-(microwave portion of the electromagnetic spectrum ranging from $40 \text{to} 75 \text{GHz}$) at $60 \text{GHz}$. Unlike other simple motion sensors that onl
+(microwave portion of the electromagnetic spectrum ranging from $40 \ \text{to} \ 75 \text{GHz}$) at $60 \text{GHz}$. Unlike other simple motion sensors that only
 measure amplitude, a coherent radar measures **both the amplitude and phase** of the
 reflected signal. This phase information is the secret to extracting micro-Doppler
 signatures.
@@ -94,7 +97,15 @@ corresponding to an amplitude and phase of the reflected pulses in the configure
 range.
 
 For any given frame, we let $z(s,d)$ be the complex IQ value (point) for a sweep *s*
-and a distance point *d*.
+and a distance point *d*, so that the signal generated from the Acconeer A121 is the following:
+
+$\begin{equation}\Bigr(\frac{\sqrt{rcs(k)}}{R_k^2}\Bigl) \cdot e^{-j\frac{4\pi R_k}{\lambda}}\end{equation}$
+
+where $R_k$ is the Euclidean distance of the person from the radar positioned at (0,0,1):
+
+$\begin{equation}R_k = \rVert d \lVert = \sqrt{x_k^2 + y_k^2 + (z_k - 1)^2}\end{equation}$
+
+$\lambda$ is the wavelenght which in the case of such radar is the light speed ($C$) divided by the carrier frequency of the radar ($60GHz$).
 
 ![Mocked data of an environment with a single moving object.](imgs/data_moving.png)
 
@@ -119,16 +130,16 @@ breathing motion.
 
 ![Mocked data of a single moving object, transformed into a distance-velocity (a.k.a. range-Doppler) map.](imgs/data_range_doppler.png)
 
-As shown, the complex data can be used to track 
-the relative movement of an object. By combining 
-this information with the sweep rate, we can also 
-determine its velocity. In practice, this is 
-commonly done by applying the fast Fourier 
-transform (FFT) to the frame over sweeps, giving 
-a distance-velocity (a.k.a.range-Doppler) map. 
-Each cell of the Range-Doppler map represents 
-This method is commonly used for applications 
-such as micro and macro gesture recognition, 
+As shown, the complex data can be used to track
+the relative movement of an object. By combining
+this information with the sweep rate, we can also
+determine its velocity. In practice, this is
+commonly done by applying the fast Fourier
+transform (FFT) to the frame over sweeps, giving
+a distance-velocity (a.k.a.range-Doppler) map.
+Each cell of the Range-Doppler map represent
+This method is commonly used for applications
+such as micro and macro gesture recognition,
 velocity measurements, and object tracking.
 
 ### Feature extraction from Range-Doppler maps
@@ -139,9 +150,25 @@ The used features for the classification of movements are extracted from the Ran
 
 - **total_energy** -> It represents how much motion there's in total. It is the sum of all values of the Range-Doppler map. This number, after the removal of the clutter (unwanted echoes form stationary or slow-moving objects) measures the energy of what moves in the frame.
 
-- **doppler_centroid** -> It represents the direction in which the energy moves on average. It's the weighted mean of the velocities for how much energy there's at each velocity. On a scale between [-16,+15] bins;
-- **doppler_spread**
-- **max_doppler_bin**
-- **spectral_entropy** -> measures how much the movement is chaotic/ordered. On a scale of log_2(NUM_SWEEPS) = log_2 (32) = 5 bits, in [0,5], when it is 0 we have the velocity concentrated on one velocity (simple movement, regular movement); when it is 5 the energy is distirbuted among all the velocities in an almost uniform way (there's also noise).
-- **high_doppler_ratio**
-- **mean_range**
+- **doppler_centroid** $\to$ It represents the direction in which the energy moves on average. It's the weighted mean of the velocities for how much energy there's at each velocity. On a scale between $[-5,3]$ bins.
+
+- **doppler_spread** $\to$ Indicates how much the velocities are different one to another. It is the standard deviation around the centroid. When it is small, the body moves as a unique block at the same velocity. When it is big, different parts of the body (arms, legs, torso, ...) move at different speeds in the same instant.
+
+- **max_doppler_bin** $\to$ Represents the highest speed in the considered frame (the single doppler bin with higher energy). Usually correpsonds to body part that reflects more (the Torso).
+
+- **spectral_entropy** $\to$ measures how much the movement is chaotic/ordered. On a scale of log_2(NUM_SWEEPS) = log_2 (8) = 3 bits, in [0,3], when it is $0$ we have the velocity concentrated on one velocity (simple movement, regular movement); when it is $3$ the energy is distributed among all the velocities in an almost uniform way (there's also noise).
+
+- **high_doppler_ratio** $\to$ Represents the part of the movement detected by the radar which is faster (useful to detect ). It's a value $\in [0,1]$. In particular for values < 0.5 we have slower movements, for values > 0.5 we have faster movements and when = 0.5 we have an indistingushable movement.
+
+- **mean_range** $\to$ Tells us at what distance is the moving person located. It is the mean of the ditances weighted by the energy computed after the clutter removal. This doesn't tell us whre's the whole body but it tells us where is the body part that is mobing that particular frame.
+
+Since when the Range-Doppler map is computed we lose information on the extension of
+the body parts (useful to tell if the person is falling, drinking) we also compute
+the raw range profile without the clutter removal. From this we get 4 more features
+related to this raw profile (the meaning of the first 3 is identical to the
+previous ones)
+
+- raw_mean_range
+- raw_range_spread
+- raw_range_span $\to$ It represents the physical extension occupied by the body parts.
+- range_excursion $\to$ Excursion of the motion's "center of mass" over the trial (column 6 = mean_range per frame): captures oscillations (drinking) and monotonic shifts (falling/sitting) alike.

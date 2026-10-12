@@ -22,3 +22,4 @@ Once that's done you need to install dependencies for the project
 ```
 
 and you're good to go!!
+The explanation of what I did is this one [Pipeline for the project and functioning of the Acconeer A121](dataset-a121/data_gathering.md)
