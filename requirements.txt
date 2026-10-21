@@ -4,3 +4,8 @@ numpy
 Boruta
 matplotlib
 PyQt6
+psutil
+# emlearn deps
+emlearn
+setuptools # for distutils error
+acconeer-exptool[app]

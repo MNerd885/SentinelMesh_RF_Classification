@@ -16,7 +16,7 @@ NUM_SWEEPS_PER_FRAME = 8  # Sweeps per frame (= Doppler bins of the Range-Dopple
 # --- Range configuration + sensor buffer budget ---
 NUM_RANGE_BINS = 16     # Number of distance bins
 START_RANGE = 0.8         # Minimal measured distance (m)
-RANGE_STEP = 0.14         # Distance between points (m) -> window 0.8 .. 2.9 m, covers the whole scene
+RANGE_STEP = 0.18         # Distance between points (m) -> window 0.8 .. 3.5 m, covers the whole scene
 PULSE_SIGMA = 1.2 * RANGE_STEP  # Pulse width, matched to the step (as the profile would be chosen on the A121)
 BYTES_PER_POINT = 4       # Complex int16 (I + Q): acc_int16_complex_t in the Acconeer SDK (not in the datasheet)
 BUFFER_BYTES = 512        # Self-imposed budget per frame (the A121 sensor buffer holds up to 4095 points)
@@ -466,9 +466,9 @@ def run_pipeline(samples_per_action):
         "raw_range_span", 
         "range_excursion"
     ])
-    dfx.to_csv('dataset-a121/synth_dataset_A121_2.csv', index=False)
+    dfx.to_csv('dataset-a121/synth_dataset_A121.csv', index=False)
     dfy = pd.DataFrame(Y, columns=["sequence of motions"])
-    dfy.to_csv("dataset-a121/synth_dataset_A121_targets_2.csv", index=False)
+    dfy.to_csv("dataset-a121/synth_dataset_A121_targets.csv", index=False)
 
 if __name__ == "__main__":
-    run_pipeline(samples_per_action=80)
+    run_pipeline(samples_per_action=10)

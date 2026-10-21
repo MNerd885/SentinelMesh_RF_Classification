@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 
 ACTIONS = ["walking", "bending", "drinking", "lying", "sitting", "falling"]
+
 features_names = [
         "mean_total_energy",
         "mean_doppler_centroid",
@@ -36,18 +37,23 @@ features_names = [
 
 oobscore = []
 
-num_Trees = [10, 30, 50, 60, 70, 100, 120, 150, 200]
-MIN_LEAF = 5
+num_Trees = [5, 10, 25, 30, 50, 60, 70, 100, 120, 150, 200]
+MIN_LEAF = 0.02
 
-X = pd.read_csv("dataset-a121/synth_dataset_A121_2.csv")
-Y = pd.read_csv("dataset-a121/synth_dataset_A121_targets_2.csv")
+X = pd.read_csv("dataset-a121/synth_dataset_A121.csv")
+Y = pd.read_csv("dataset-a121/synth_dataset_A121_targets.csv")
 
 # Split Train/Test
 X_train, X_test, y_train, y_test= train_test_split(X, Y, test_size=0.3, stratify=Y, random_state=36)
 
+# Covnerting the to float32 in order to reduce RAM usage
+X_train = X_train.astype(np.float32)
+X_test = X_test.astype(np.float32)
+
+
 print("\n--- Training of the RF classifier ---")
 
-clf = RandomForestClassifier(max_depth=10, warm_start=True, random_state=48,min_samples_leaf=MIN_LEAF, bootstrap=True, oob_score=True)
+clf = RandomForestClassifier(max_depth=5, warm_start=True, random_state=48, min_samples_leaf=MIN_LEAF, bootstrap=True, oob_score=True)
 for trees in num_Trees:
 
     clf.set_params(n_estimators=trees)
@@ -56,7 +62,6 @@ for trees in num_Trees:
     # Record of the oob error for every number of Trees
     oob_error = 1 - clf.oob_score_
     oobscore.append((trees,oob_error))
-
 
 # Testing on the model
 y_pred = clf.predict(X_test)
