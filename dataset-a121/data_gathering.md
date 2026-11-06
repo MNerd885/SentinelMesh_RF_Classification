@@ -15,8 +15,8 @@ The pipeline will be the following:
 In this section I simulate all the 6 motions: walking, bending, drinking, lying, sitting and falling. What I do, since I don't have real data, is to implement this function which represents the human body as 7 scatterer points: Pelvis (Root), Torso, Head, Right Hand, Left Hand, Right leg, Left leg (reference of the idea [CMU Graphics Lab Motion Capture Database](https://mocap.cs.cmu.edu/)).
 
 I assign a **RCS (Radar Cross Section)** in order to have a different electromagnetic 
-reflection in every body part. For example the Torso has a much bigger surface and 
-refelects more (RCS = 1.0) with respect to the hand (RCS = 0.15) (the reference paper 
+reflection in every body part. For example the Torso has a much bigger surface and
+refelects more (RCS = 1.0) with respect to the hand (RCS = 0.15) (the reference paper
 for this idea is [Chen, V. C. (2019). The Micro-Doppler Effect in Radar (2nd ed.). Artech House.](https://books.google.it/books/about/The_Micro_doppler_Effect_in_Radar.html?id=eJ7eMHpxt30C&redir_esc=y)).
 
 #### 3D Reference System Convention

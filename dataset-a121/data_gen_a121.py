@@ -409,8 +409,8 @@ def run_pipeline(samples_per_action):
         print(f"Generazione campioni per la classe: {action}...")
         for n in range(samples_per_action):
 
-            # Adds a slight random variation to the duration and speed of the movement
-            dur = np.random.uniform(1.8, 3)
+            # Duration of the movement of a single motion with a total of 32 frames in one scan
+            dur = 3.2
             points, rcs = generate_mocap_trajectory(action, duration_sec=dur, fs=SWEEP_RATE)
 
             if n == 0:

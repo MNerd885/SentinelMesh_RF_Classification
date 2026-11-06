@@ -38,7 +38,7 @@ features_names = [
 oobscore = []
 
 num_Trees = [5, 10, 25, 30, 50, 60, 70, 100, 120, 150, 200]
-MIN_LEAF = 0.02
+MIN_LEAF = 2
 
 X = pd.read_csv("dataset-a121/synth_dataset_A121.csv")
 Y = pd.read_csv("dataset-a121/synth_dataset_A121_targets.csv")
