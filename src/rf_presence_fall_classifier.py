@@ -67,6 +67,6 @@ flash_bytes = n_int * 7 + n_leaves * 6 * 4
 print(f"Number of nodes: {n_nodes} \n Number of leaves: {n_leaves} \n Memory footprint: {flash_bytes}")
 
 # Trained model dump in order to be loaded into the MCU
-filename = get_unique_filename("fall_clf","h")
-embedded_rf = emlearn.convert(clf, method="inline")
-embedded_rf.save(file="model/"+filename, name="fall_clf")
+#filename = get_unique_filename("fall_clf","h")
+#embedded_rf = emlearn.convert(clf, method="inline")
+#embedded_rf.save(file="model/"+filename, name="fall_clf")
