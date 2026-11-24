@@ -1,4 +1,4 @@
-# SentinelMesh_RF_Classification
+# SentinelMesh_RF_Classification 
 
 Code and technical annex for the report "Sentinel Mesh: Batteryless,
 Camera-Free Presence Sensing with Intermittent Computing" (HiPEAC Student
