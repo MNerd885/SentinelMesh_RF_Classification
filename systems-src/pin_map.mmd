@@ -1,0 +1,75 @@
+graph TD
+    subgraph MCU["Target Microcontroller (MCU)"]
+        direction TB
+        ADC["ADC / Comparator<br/>(Voltage Monitor)"]
+
+        subgraph SPI1["SPI Bus 1 (Acconeer Radar)"]
+            PA5["PA5 (SPI1_SCK)"]
+            PA7["PA7 (SPI1_MOSI)"]
+            PA6["PA6 (SPI1_MISO)"]
+            PB6["PB6 (GPIO_CS1)"]
+            PB0["PB0 (GPIO_INT1)"]
+            PB1["PB1 (GPIO_EN)"]
+        end
+
+        subgraph SPI2["SPI Bus 2 (SX1262 LoRa)"]
+            PB13["PB13 (SPI2_SCK)"]
+            PB15["PB15 (SPI2_MOSI)"]
+            PB14["PB14 (SPI2_MISO)"]
+            PB12["PB12 (GPIO_CS2)"]
+            PC4["PC4 (GPIO_BUSY)"]
+            PC5["PC5 (GPIO_DIO1)"]
+            PC3["PC3 (GPIO_RST)"]
+        end
+    end
+
+    subgraph Harvester["Energy Supply"]
+        VCAP["Supercapacitor V_DD Rail"]
+    end
+
+    subgraph Radar["Acconeer A121 Radar Sensor"]
+        R_SCK["SCK"]
+        R_MOSI["MOSI"]
+        R_MISO["MISO"]
+        R_CS["CS"]
+        R_INT["INT"]
+        R_EN["ENABLE"]
+    end
+
+    subgraph LoRa["Semtech SX1262 LoRa Module"]
+        L_SCK["SCK"]
+        L_MOSI["MOSI"]
+        L_MISO["MISO"]
+        L_CS["CS"]
+        L_BUSY["BUSY"]
+        L_DIO1["DIO1"]
+        L_RST["RESET"]
+    end
+
+    %% Connections
+    VCAP -->|Monitors V_DD| ADC
+
+    PA5 --> R_SCK
+    PA7 --> R_MOSI
+    PA6 --> R_MISO
+    PB6 --> R_CS
+    PB0 --> R_INT
+    PB1 --> R_EN
+
+    PB13 --> L_SCK
+    PB15 --> L_MOSI
+    PB14 --> L_MISO
+    PB12 --> L_CS
+    PC4 --> L_BUSY
+    PC5 --> L_DIO1
+    PC3 --> L_RST
+
+    classDef mcu fill:#1f2937,stroke:#4b5563,color:#fff;
+    classDef sensor fill:#1e3a8a,stroke:#3b82f6,color:#fff;
+    classDef lora fill:#064e3b,stroke:#10b981,color:#fff;
+    classDef power fill:#7c2d12,stroke:#f97316,color:#fff;
+
+    class MCU mcu;
+    class Radar sensor;
+    class LoRa lora;
+    class Harvester power;
