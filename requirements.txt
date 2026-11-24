@@ -8,4 +8,4 @@ psutil
 # emlearn deps
 emlearn
 setuptools # for distutils error
-acconeer-exptool[app] 
+acconeer-exptool[app]
