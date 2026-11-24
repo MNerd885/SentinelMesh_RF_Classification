@@ -9,6 +9,3 @@ psutil
 emlearn
 setuptools # for distutils error
 acconeer-exptool[app]
-
-
-
